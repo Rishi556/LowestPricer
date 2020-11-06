@@ -10,8 +10,8 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@hiveio/hive-js": "^0.8.2",
+    "@hiveio/hive-js": "^0.8.8",
     "axios": "^0.19.2",
-    "node-cron": "^2.0.3"
+    "node-color-log": "^5.2.0"
   }
 }

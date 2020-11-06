@@ -1,91 +1,83 @@
 let axios = require("axios")
 let hive = require("@hiveio/hive-js")
+let logger = require("node-color-log")
 
 let rpcAPI = "https://api.hive-engine.com/rpc/contracts"
 let markets = ["STARBITS", "SIM", "BEER", "HUSTLER", "LEO", "LIST"]
-let username = "nftmart.fees"
+let username = "rishi556"
 let privateActiveKey = ""
 
-getOrders()
-
-setInterval(() => {
-  getOrders()
-}, 1000 * 5 * 60)
-
-
-async function getOrders() {
-  for (i in markets) {
-    let token = markets[i]
-    let sellOrderQuery = { id: 0, jsonrpc: "2.0", method: "find", params: { contract: "market", table: "sellBook", query: { account: username, symbol: markets[i] }, limit: 1000, offset: 0, indexes: [{ index: "_id", descending: true }] } };
-    let resMetrics = await axios.post(rpcAPI, sellOrderQuery)
-    let sell = [];
-    for (i in resMetrics.data.result) {
-      sell.push(resMetrics.data.result[i].txId)
-    }
-    let c = 1;
-    for (i in sell) {
-      cancelOrder("sell", sell[i], c)
-      c++
+async function cancelAllOrders() {
+  let sellOrderQuery = { id: 0, jsonrpc: "2.0", method: "find", params: { contract: "market", table: "sellBook", query: { account: username, symbol: { $in: markets } }, limit: 50, offset: 0, indexes: [{ index: "_id", descending: true }] } };
+  let result = await axios.post(rpcAPI, sellOrderQuery)
+  let orders = result.data.result
+  if (orders.length === 0) {
+    return true
+  }
+  let cancelJSON = []
+  for (let i in orders) {
+    cancelJSON.push({ "contractName": "market", "contractAction": "cancel", "contractPayload": { "type": "sell", "id": `${orders[i].txId}` } })
+  }
+  hive.broadcast.customJson(privateActiveKey, [username], null, "ssc-mainnet-hive", JSON.stringify(cancelJSON), (err) => {
+    if (err){
+      logger.error(`Error cancelling, recieved error : ${err}, JSON attempted to broadcst: ${JSON.stringify(cancelJSON)}.`)
+      throw new Error(err)
     }
     setTimeout(() => {
-      placeOrders(token)
-    }, 10 * 1000 * markets.length)
+      return cancelAllOrders()
+    }, 1000 * 10)
+  })
+}
+
+async function getBalances() {
+  let getBalancesQuery = { id: 0, jsonrpc: "2.0", method: "find", params: { contract: "tokens", table: "balances", query: { account: username, symbol: { $in: markets } }, limit: 50, offset: 0, indexes: [] } }
+  let result = await axios.post(rpcAPI, getBalancesQuery)
+  let balances = result.data.result
+  let nonZeroBalances = {}
+  for (let i in balances){
+    if (parseFloat(balances[i].balance) > 0){
+      nonZeroBalances[balances[i].symbol] = balances[i].balance
+    }
   }
+  return nonZeroBalances
 }
 
-
-
-function cancelOrder(type, id, count) {
-  setTimeout(() => {
-    let cancelJson = { "contractName": "market", "contractAction": "cancel", "contractPayload": { "type": `${type}`, "id": `${id}` } };
-    console.log(`Attempting to cancel ${type} order with id ${id}.`);
-    hive.broadcast.customJson(privateActiveKey, [username], null, "ssc-mainnet-hive", JSON.stringify(cancelJson), (err) => {
-      if (err) {
-        console.log(`Error canceling order with id ${id}.`)
-      } else {
-        console.log(`Successfully canceled order with id ${id}.`)
-      }
-    })
-  }, count * 4000)
+async function getPrices(tokens) {
+  let metricsQuery = { id: 0, jsonrpc: "2.0", method: "find", params: { contract: "market", table: "metrics", query: { symbol: { $in: tokens } }, limit: 50, offset: 0, indexes: [] } };
+  let result = await axios.post(rpcAPI, metricsQuery)
+  let prices = result.data.result
+  let validPrices = {}
+  for (let i in prices){
+    if (parseFloat(prices[i].lowestAsk) !== 0){
+      validPrices[prices[i].symbol] = prices[i].lowestAsk
+    }
+  }
+  return validPrices
 }
 
-function placeOrders(token) {
-  getBalances(token, (bal) => {
-    if (bal > 0) {
-      getPrice(token, (price) => {
-        console.log(`Attempting to place order to sell ${bal} of ${token} at ${(price - 0.00000001).toFixed(8)}.`)
-        let orderJSON = {"contractName":"market","contractAction": `sell`,"contractPayload":{"symbol": `${token}` ,"quantity": `${bal}`, "price": `${(price - 0.00000001).toFixed(8)}`}}
-        hive.broadcast.customJson(privateActiveKey, [username], null, "ssc-mainnet-hive", JSON.stringify(orderJSON), (err, result) => {
-          if (err) {
-            console.log(`Error placing that order.`)
-          } else {
-            console.log(`Successfully placed the order. If it sells, we'll get ${(bal * (price - 0.00000001)).toFixed(3)} HIVE.`)
-          }
-        })
-      })
+function placeOrders(balances, prices){
+  let orderJSON = []
+  for (let i in balances){
+    if (prices[i]){
+      orderJSON.push({ "contractName": "market", "contractAction": `sell`, "contractPayload": { "symbol": i, "quantity": `${balances[i]}`, "price": `${(parseFloat(prices[i]) - 0.00000001).toFixed(8)}` } })
+    }
+  }
+  hive.broadcast.customJson(privateActiveKey, [username], null, "ssc-mainnet-hive", JSON.stringify(orderJSON), (err) => {
+    if (err){
+      logger.error(`Error placing order, recieved error : ${err}, JSON attempted to broadcst: ${JSON.stringify(orderJSON)}.`)
+      throw new Error(err)
     }
   })
 }
 
-
-
-function getBalances(symbol, callback) {
-  let getBalancesQuery = { id: 0, jsonrpc: "2.0", method: "find", params: { contract: "tokens", table: "balances", query: { account: username, symbol: symbol }, limit: 1000, offset: 0, indexes: [] } }
-  axios.post(rpcAPI, getBalancesQuery).then((res) => {
-    if (res.data.result){
-      let balance = parseFloat(res.data.result[0].balance)
-      callback(balance)
-    } else {
-      callback(0)
-    }
-  })
+async function refresh(){
+  await cancelAllOrders()
+  let balances = await getBalances()
+  let prices = await getPrices(Object.keys(balances))
+  placeOrders(balances, prices)
 }
 
-function getPrice(token, callback) {
-  let metricsQuery = { id: 0, jsonrpc: "2.0", method: "findOne", params: { contract: "market", table: "metrics", query: { symbol: token }, limit: 1000, offset: 0, indexes: [] } };
-  axios.post(rpcAPI, metricsQuery).then((resMetrics) => {
-    let data = resMetrics.data.result;
-    let lowestAsk = parseFloat(data.lowestAsk);
-    callback(lowestAsk)
-  })
-}
+refresh()
+setInterval(() => {
+  refresh()
+}, 10 * 1000 * 5)
