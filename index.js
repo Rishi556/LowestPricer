@@ -62,6 +62,9 @@ function placeOrders(balances, prices){
       orderJSON.push({ "contractName": "market", "contractAction": `sell`, "contractPayload": { "symbol": i, "quantity": `${balances[i]}`, "price": `${(parseFloat(prices[i]) - 0.00000001).toFixed(8)}` } })
     }
   }
+  if (orderJSON.length === 0){
+    return
+  }
   hive.broadcast.customJson(privateActiveKey, [username], null, "ssc-mainnet-hive", JSON.stringify(orderJSON), (err) => {
     if (err){
       logger.error(`Error placing order, recieved error : ${err}, JSON attempted to broadcst: ${JSON.stringify(orderJSON)}.`)
